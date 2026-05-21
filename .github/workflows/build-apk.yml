@@ -25,8 +25,16 @@ jobs:
         with:
           gradle-version: '8.6'
 
+      # Strip any whitespace/newlines before decoding
       - name: Decode keystore
-        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 --decode > app/keystore.jks
+        run: echo "${{ secrets.KEYSTORE_BASE64 }}" | tr -d '[:space:]' | base64 --decode > app/keystore.jks
+
+      - name: Verify keystore
+        run: |
+          keytool -list \
+            -keystore app/keystore.jks \
+            -storepass "${{ secrets.KEYSTORE_PASSWORD }}" \
+            -alias "${{ secrets.KEY_ALIAS }}"
 
       - name: Build release APK
         env:
