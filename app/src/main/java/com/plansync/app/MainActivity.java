@@ -1,11 +1,12 @@
 package com.plansync.app;
 
 import android.annotation.SuppressLint;
-import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.net.Uri;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.view.View;
 import android.webkit.CookieManager;
@@ -20,9 +21,19 @@ import android.widget.Button;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
+import org.json.JSONObject;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.net.HttpURLConnection;
+import java.net.URL;
+
 public class MainActivity extends AppCompatActivity {
 
     private static final String APP_URL = "https://plansyncapk.vercel.app";
+    // Update these to match your GitHub repo
+    private static final String GITHUB_OWNER = "callmemommyy";
+    private static final String GITHUB_REPO  = "plansync-android";
+    private static final int    CURRENT_VERSION = BuildConfig.VERSION_CODE;
 
     private WebView webView;
     private SwipeRefreshLayout swipeRefresh;
@@ -39,34 +50,28 @@ public class MainActivity extends AppCompatActivity {
         offlineLayout = findViewById(R.id.offline_layout);
         Button retryBtn = findViewById(R.id.retry_button);
 
-        // ── WebView settings ────────────────────────────────────────────────
+        // ── WebView settings ─────────────────────────────────────────────────
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
-        settings.setDomStorageEnabled(true);       // localStorage (Firebase Auth needs this)
+        settings.setDomStorageEnabled(true);
         settings.setDatabaseEnabled(true);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         settings.setMediaPlaybackRequiresUserGesture(false);
         settings.setAllowFileAccess(false);
-        settings.setGeolocationEnabled(false);
         settings.setSupportZoom(false);
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
 
-        // Persist cookies across sessions
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
 
-        // ── WebViewClient — keep navigation inside the app ───────────────────
+        // ── WebViewClient ─────────────────────────────────────────────────────
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
-                // Stay in-app for plansyncapk.vercel.app; open everything else in browser
-                if (url.startsWith(APP_URL)) {
-                    return false;
-                }
-                Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
-                startActivity(intent);
+                if (url.startsWith(APP_URL)) return false;
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
                 return true;
             }
 
@@ -80,7 +85,7 @@ public class MainActivity extends AppCompatActivity {
             }
 
             @Override
-            public void onReceivedError(android.webkit.WebView view,
+            public void onReceivedError(WebView view,
                                         android.webkit.WebResourceRequest request,
                                         android.webkit.WebResourceError error) {
                 if (request.isForMainFrame()) {
@@ -91,14 +96,11 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // ── WebChromeClient — needed for file inputs, alerts, etc. ───────────
         webView.setWebChromeClient(new WebChromeClient());
 
-        // ── Pull-to-refresh ─────────────────────────────────────────────────
         swipeRefresh.setOnRefreshListener(() -> webView.reload());
         swipeRefresh.setColorSchemeResources(R.color.colorPrimary);
 
-        // ── Retry button on offline screen ───────────────────────────────────
         retryBtn.setOnClickListener(v -> {
             if (isOnline()) {
                 offlineLayout.setVisibility(View.GONE);
@@ -107,7 +109,6 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // ── Handle deep links ────────────────────────────────────────────────
         String url = APP_URL;
         Intent intent = getIntent();
         if (intent != null && intent.getData() != null) {
@@ -116,23 +117,87 @@ public class MainActivity extends AppCompatActivity {
 
         if (isOnline()) {
             webView.loadUrl(url);
+            checkForUpdate(); // check silently in background
         } else {
             offlineLayout.setVisibility(View.VISIBLE);
             webView.setVisibility(View.GONE);
         }
     }
 
-    // ── Back button navigates WebView history ────────────────────────────────
-    @Override
-    public void onBackPressed() {
-        if (webView.canGoBack()) {
-            webView.goBack();
-        } else {
-            super.onBackPressed();
+    // ── Update checker ────────────────────────────────────────────────────────
+    private void checkForUpdate() {
+        new AsyncTask<Void, Void, UpdateInfo>() {
+            @Override
+            protected UpdateInfo doInBackground(Void... voids) {
+                try {
+                    String apiUrl = "https://api.github.com/repos/" + GITHUB_OWNER + "/" + GITHUB_REPO + "/releases/latest";
+                    HttpURLConnection conn = (HttpURLConnection) new URL(apiUrl).openConnection();
+                    conn.setRequestProperty("Accept", "application/vnd.github.v3+json");
+                    conn.setConnectTimeout(5000);
+                    conn.setReadTimeout(5000);
+
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()));
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) sb.append(line);
+                    reader.close();
+
+                    JSONObject json = new JSONObject(sb.toString());
+                    String tagName = json.getString("tag_name"); // e.g. "v8"
+                    int latestVersion = Integer.parseInt(tagName.replace("v", "").trim());
+
+                    // Get APK download URL from assets
+                    String downloadUrl = null;
+                    org.json.JSONArray assets = json.getJSONArray("assets");
+                    if (assets.length() > 0) {
+                        downloadUrl = assets.getJSONObject(0).getString("browser_download_url");
+                    }
+                    // fallback to release page
+                    if (downloadUrl == null) downloadUrl = json.getString("html_url");
+
+                    return new UpdateInfo(latestVersion, tagName, downloadUrl);
+                } catch (Exception e) {
+                    return null;
+                }
+            }
+
+            @Override
+            protected void onPostExecute(UpdateInfo info) {
+                if (info != null && info.versionCode > CURRENT_VERSION) {
+                    showUpdateDialog(info.versionName, info.downloadUrl);
+                }
+            }
+        }.execute();
+    }
+
+    private void showUpdateDialog(String versionName, String downloadUrl) {
+        new AlertDialog.Builder(this)
+            .setTitle("Update Available")
+            .setMessage("PlanSync " + versionName + " is available. Update now for the latest features.")
+            .setPositiveButton("Update", (dialog, which) -> {
+                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(downloadUrl)));
+            })
+            .setNegativeButton("Later", null)
+            .setCancelable(true)
+            .show();
+    }
+
+    private static class UpdateInfo {
+        int versionCode;
+        String versionName;
+        String downloadUrl;
+        UpdateInfo(int code, String name, String url) {
+            versionCode = code; versionName = name; downloadUrl = url;
         }
     }
 
-    // ── Restore state on rotation ────────────────────────────────────────────
+    // ── Back navigation ───────────────────────────────────────────────────────
+    @Override
+    public void onBackPressed() {
+        if (webView.canGoBack()) webView.goBack();
+        else super.onBackPressed();
+    }
+
     @Override
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
@@ -146,8 +211,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private boolean isOnline() {
-        ConnectivityManager cm =
-            (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+        ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
         NetworkInfo info = cm.getActiveNetworkInfo();
         return info != null && info.isConnected();
     }
