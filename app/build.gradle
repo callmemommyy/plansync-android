@@ -10,9 +10,9 @@ android {
         applicationId "com.plansync.app"
         minSdk 24
         targetSdk 34
-        versionCode 1
+        // Use VERSION_CODE env var injected by GitHub Actions, default to 1 locally
+        versionCode (System.getenv("VERSION_CODE") ?: "1").toInteger()
         versionName "1.0"
-        buildConfigField "int", "VERSION_CODE", "1"
     }
 
     buildFeatures {
