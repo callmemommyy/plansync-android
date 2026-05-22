@@ -17,11 +17,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    # Auto-retry up to 3 times on failure
-    strategy:
-      max-parallel: 1
-      matrix:
-        attempt: [1]
 
     steps:
       - name: Checkout
@@ -33,7 +28,7 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Gradle (no cache to avoid flaky cancellations)
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.6'
@@ -55,6 +50,7 @@ jobs:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          VERSION_CODE: ${{ github.run_number }}
         run: gradle assembleRelease
 
       - name: Rename APK
