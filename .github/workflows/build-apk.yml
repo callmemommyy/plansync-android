@@ -4,11 +4,19 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  repository_dispatch:
+    types: [web-updated]  # triggered by the main web repo
+
+concurrency:
+  group: build-apk
+  cancel-in-progress: true
 
 jobs:
   build:
     name: Build & Sign APK
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout
@@ -25,7 +33,6 @@ jobs:
         with:
           gradle-version: '8.6'
 
-      # Strip any whitespace/newlines before decoding
       - name: Decode keystore
         run: echo "${{ secrets.KEYSTORE_BASE64 }}" | tr -d '[:space:]' | base64 --decode > app/keystore.jks
 
@@ -49,7 +56,7 @@ jobs:
           mv app/build/outputs/apk/release/app-release.apk \
              app/build/outputs/apk/release/PlanSync-v${{ github.run_number }}.apk
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: PlanSync-APK
@@ -61,7 +68,10 @@ jobs:
         with:
           tag_name: v${{ github.run_number }}
           name: PlanSync v${{ github.run_number }}
+          body: |
+            Auto-built from latest web update.
+            Install or update using the APK below.
           files: app/build/outputs/apk/release/PlanSync-v${{ github.run_number }}.apk
-          generate_release_notes: true
+          generate_release_notes: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
