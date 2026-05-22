@@ -30,7 +30,6 @@ import java.net.URL;
 public class MainActivity extends AppCompatActivity {
 
     private static final String APP_URL = "https://plansyncapk.vercel.app";
-    // Update these to match your GitHub repo
     private static final String GITHUB_OWNER = "callmemommyy";
     private static final String GITHUB_REPO  = "plansync-android";
     private static final int    CURRENT_VERSION = BuildConfig.VERSION_CODE;
@@ -50,7 +49,52 @@ public class MainActivity extends AppCompatActivity {
         offlineLayout = findViewById(R.id.offline_layout);
         Button retryBtn = findViewById(R.id.retry_button);
 
-        // ── WebView settings ─────────────────────────────────────────────────
+        setupWebView();
+
+        swipeRefresh.setOnRefreshListener(() -> webView.reload());
+        swipeRefresh.setColorSchemeResources(R.color.colorPrimary);
+
+        retryBtn.setOnClickListener(v -> {
+            if (isOnline()) {
+                offlineLayout.setVisibility(View.GONE);
+                webView.setVisibility(View.VISIBLE);
+                webView.reload();
+            }
+        });
+
+        // Handle deep link / redirect back from Google auth
+        handleIntent(getIntent());
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        handleIntent(intent);
+    }
+
+    private void handleIntent(Intent intent) {
+        if (intent == null) {
+            loadApp(APP_URL);
+            return;
+        }
+
+        Uri data = intent.getData();
+        if (data != null) {
+            String url = data.toString();
+            // If returning from Google OAuth, load URL inside the WebView
+            // so Firebase can pick up the auth result
+            if (url.startsWith(APP_URL) || url.contains("plansyncapk.vercel.app")) {
+                loadApp(url);
+                return;
+            }
+        }
+
+        loadApp(APP_URL);
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private void setupWebView() {
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
         settings.setDomStorageEnabled(true);
@@ -61,17 +105,37 @@ public class MainActivity extends AppCompatActivity {
         settings.setSupportZoom(false);
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
+        // Required for Google auth redirect to work inside WebView
+        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
 
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
 
-        // ── WebViewClient ─────────────────────────────────────────────────────
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
-                if (url.startsWith(APP_URL)) return false;
-                startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+
+                // Keep ALL plansyncapk.vercel.app URLs inside the WebView
+                if (url.contains("plansyncapk.vercel.app")) {
+                    return false;
+                }
+
+                // Keep Google auth URLs inside WebView so redirect works
+                if (url.contains("accounts.google.com") ||
+                    url.contains("googleapis.com") ||
+                    url.contains("google.com/o/oauth2") ||
+                    url.contains("securetoken.google.com") ||
+                    url.contains("identitytoolkit.googleapis.com")) {
+                    return false;
+                }
+
+                // Everything else opens in external browser
+                try {
+                    startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                } catch (Exception e) {
+                    // ignore
+                }
                 return true;
             }
 
@@ -86,7 +150,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             public void onReceivedError(WebView view,
-                                        android.webkit.WebResourceRequest request,
+                                        WebResourceRequest request,
                                         android.webkit.WebResourceError error) {
                 if (request.isForMainFrame()) {
                     swipeRefresh.setRefreshing(false);
@@ -97,27 +161,14 @@ public class MainActivity extends AppCompatActivity {
         });
 
         webView.setWebChromeClient(new WebChromeClient());
+    }
 
-        swipeRefresh.setOnRefreshListener(() -> webView.reload());
-        swipeRefresh.setColorSchemeResources(R.color.colorPrimary);
-
-        retryBtn.setOnClickListener(v -> {
-            if (isOnline()) {
-                offlineLayout.setVisibility(View.GONE);
-                webView.setVisibility(View.VISIBLE);
-                webView.reload();
-            }
-        });
-
-        String url = APP_URL;
-        Intent intent = getIntent();
-        if (intent != null && intent.getData() != null) {
-            url = intent.getData().toString();
-        }
-
+    private void loadApp(String url) {
         if (isOnline()) {
+            webView.setVisibility(View.VISIBLE);
+            offlineLayout.setVisibility(View.GONE);
             webView.loadUrl(url);
-            checkForUpdate(); // check silently in background
+            checkForUpdate();
         } else {
             offlineLayout.setVisibility(View.VISIBLE);
             webView.setVisibility(View.GONE);
@@ -143,16 +194,14 @@ public class MainActivity extends AppCompatActivity {
                     reader.close();
 
                     JSONObject json = new JSONObject(sb.toString());
-                    String tagName = json.getString("tag_name"); // e.g. "v8"
+                    String tagName = json.getString("tag_name");
                     int latestVersion = Integer.parseInt(tagName.replace("v", "").trim());
 
-                    // Get APK download URL from assets
                     String downloadUrl = null;
                     org.json.JSONArray assets = json.getJSONArray("assets");
                     if (assets.length() > 0) {
                         downloadUrl = assets.getJSONObject(0).getString("browser_download_url");
                     }
-                    // fallback to release page
                     if (downloadUrl == null) downloadUrl = json.getString("html_url");
 
                     return new UpdateInfo(latestVersion, tagName, downloadUrl);
@@ -191,7 +240,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // ── Back navigation ───────────────────────────────────────────────────────
     @Override
     public void onBackPressed() {
         if (webView.canGoBack()) webView.goBack();
