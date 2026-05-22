@@ -12,6 +12,11 @@ android {
         targetSdk 34
         versionCode 1
         versionName "1.0"
+        buildConfigField "int", "VERSION_CODE", "1"
+    }
+
+    buildFeatures {
+        buildConfig true
     }
 
     signingConfigs {
