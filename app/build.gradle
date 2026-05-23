@@ -10,7 +10,7 @@ android {
         applicationId "com.plansync.app"
         minSdk 24
         targetSdk 34
-        versionCode 1
+        versionCode Integer.parseInt(System.getenv("VERSION_CODE") ?: "1")
         versionName "1.0"
     }
 
