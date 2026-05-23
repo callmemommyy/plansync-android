@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
 import android.net.Uri;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
@@ -12,6 +13,7 @@ import android.os.AsyncTask;
 import android.os.Bundle;
 import android.view.View;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -20,6 +22,8 @@ import android.webkit.WebViewClient;
 import android.widget.LinearLayout;
 import android.widget.Button;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.browser.customtabs.CustomTabColorSchemeParams;
+import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import org.json.JSONArray;
@@ -38,16 +42,6 @@ public class MainActivity extends AppCompatActivity {
     private WebView webView;
     private SwipeRefreshLayout swipeRefresh;
     private LinearLayout offlineLayout;
-
-    // Get versionCode from the installed package — no BuildConfig needed
-    private int getInstalledVersionCode() {
-        try {
-            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
-            return info.versionCode;
-        } catch (PackageManager.NameNotFoundException e) {
-            return 1;
-        }
-    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -85,17 +79,16 @@ public class MainActivity extends AppCompatActivity {
     private void handleIntent(Intent intent) {
         if (intent == null) { loadApp(APP_URL); return; }
         Uri data = intent.getData();
-        if (data != null) {
-            String url = data.toString();
-            if (url.contains("plansyncapk.vercel.app")) {
-                loadApp(url);
-                return;
-            }
+        if (data != null && data.toString().contains("plansyncapk.vercel.app")) {
+            // Returning from Chrome Custom Tab after Google auth — reload app
+            // Firebase will pick up the auth state via onAuthStateChanged
+            loadApp(APP_URL);
+            return;
         }
         loadApp(APP_URL);
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
+    @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
     private void setupWebView() {
         WebSettings settings = webView.getSettings();
         settings.setJavaScriptEnabled(true);
@@ -107,29 +100,36 @@ public class MainActivity extends AppCompatActivity {
         settings.setSupportZoom(false);
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
-        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
 
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
+
+        // JS bridge: web app calls Android.openGoogleAuth(url)
+        // to open Google sign-in in Chrome Custom Tab
+        webView.addJavascriptInterface(new Object() {
+            @JavascriptInterface
+            public void openGoogleAuth(String url) {
+                runOnUiThread(() -> openInCustomTab(url));
+            }
+        }, "Android");
 
         webView.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
 
-                // Stay in WebView for the app
+                // Stay inside WebView for the app itself
                 if (url.contains("plansyncapk.vercel.app")) return false;
 
-                // Stay in WebView for Google auth
-                if (url.contains("accounts.google.com")          ||
-                    url.contains("googleapis.com")                ||
-                    url.contains("google.com/o/oauth2")           ||
-                    url.contains("securetoken.google.com")        ||
+                // Intercept Google auth URLs — open in Chrome Custom Tab instead
+                if (url.contains("accounts.google.com") ||
+                    url.contains("google.com/o/oauth2") ||
                     url.contains("identitytoolkit.googleapis.com")) {
-                    return false;
+                    openInCustomTab(url);
+                    return true;
                 }
 
-                // Open everything else in external browser
+                // Open everything else in the external browser
                 try {
                     startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
                 } catch (Exception ignored) {}
@@ -157,6 +157,18 @@ public class MainActivity extends AppCompatActivity {
         });
 
         webView.setWebChromeClient(new WebChromeClient());
+    }
+
+    /** Opens a URL in Chrome Custom Tab — Google allows OAuth here */
+    private void openInCustomTab(String url) {
+        CustomTabsIntent customTabsIntent = new CustomTabsIntent.Builder()
+                .setDefaultColorSchemeParams(
+                        new CustomTabColorSchemeParams.Builder()
+                                .setToolbarColor(Color.parseColor("#6366F1"))
+                                .build())
+                .setShowTitle(true)
+                .build();
+        customTabsIntent.launchUrl(this, Uri.parse(url));
     }
 
     private void loadApp(String url) {
@@ -187,7 +199,6 @@ public class MainActivity extends AppCompatActivity {
                     conn.setRequestProperty("Accept", "application/vnd.github.v3+json");
                     conn.setConnectTimeout(5000);
                     conn.setReadTimeout(5000);
-
                     if (conn.getResponseCode() != 200) return null;
 
                     BufferedReader reader =
@@ -197,16 +208,14 @@ public class MainActivity extends AppCompatActivity {
                     while ((line = reader.readLine()) != null) sb.append(line);
                     reader.close();
 
-                    JSONObject json = new JSONObject(sb.toString());
-                    String tagName = json.getString("tag_name"); // e.g. "v37"
-                    int latestVersion = Integer.parseInt(tagName.replace("v", "").trim());
+                    JSONObject json     = new JSONObject(sb.toString());
+                    String tagName      = json.getString("tag_name");
+                    int latestVersion   = Integer.parseInt(tagName.replace("v", "").trim());
 
-                    // Get direct APK download URL from release assets
-                    String downloadUrl = null;
-                    JSONArray assets = json.getJSONArray("assets");
+                    String downloadUrl  = null;
+                    JSONArray assets    = json.getJSONArray("assets");
                     for (int i = 0; i < assets.length(); i++) {
-                        String name = assets.getJSONObject(i).getString("name");
-                        if (name.endsWith(".apk")) {
+                        if (assets.getJSONObject(i).getString("name").endsWith(".apk")) {
                             downloadUrl = assets.getJSONObject(i)
                                     .getString("browser_download_url");
                             break;
@@ -244,8 +253,15 @@ public class MainActivity extends AppCompatActivity {
         final int versionCode;
         final String versionName;
         final String downloadUrl;
-        UpdateInfo(int code, String name, String url) {
-            versionCode = code; versionName = name; downloadUrl = url;
+        UpdateInfo(int c, String n, String u) { versionCode=c; versionName=n; downloadUrl=u; }
+    }
+
+    private int getInstalledVersionCode() {
+        try {
+            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
+            return info.versionCode;
+        } catch (PackageManager.NameNotFoundException e) {
+            return 1;
         }
     }
 
