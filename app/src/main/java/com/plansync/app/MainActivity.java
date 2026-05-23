@@ -32,7 +32,6 @@ public class MainActivity extends AppCompatActivity {
     private static final String APP_URL = "https://plansyncapk.vercel.app";
     private static final String GITHUB_OWNER = "callmemommyy";
     private static final String GITHUB_REPO  = "plansync-android";
-    private static final int    CURRENT_VERSION = BuildConfig.VERSION_CODE;
 
     private WebView webView;
     private SwipeRefreshLayout swipeRefresh;
@@ -175,7 +174,7 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // ── Update checker ────────────────────────────────────────────────────────
+    // ── Update checker ───────────────────────────────────────────────────────
     private void checkForUpdate() {
         new AsyncTask<Void, Void, UpdateInfo>() {
             @Override
@@ -212,7 +211,7 @@ public class MainActivity extends AppCompatActivity {
 
             @Override
             protected void onPostExecute(UpdateInfo info) {
-                if (info != null && info.versionCode > CURRENT_VERSION) {
+                if (info != null && info.versionCode > BuildConfig.VERSION_CODE) {
                     showUpdateDialog(info.versionName, info.downloadUrl);
                 }
             }
