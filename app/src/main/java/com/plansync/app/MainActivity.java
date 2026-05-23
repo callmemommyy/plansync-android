@@ -20,6 +20,7 @@ import android.widget.TextView;
 import android.widget.Button;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
+import com.plansync.app.BuildConfig;
 
 import org.json.JSONObject;
 import java.io.BufferedReader;
@@ -263,3 +264,4 @@ public class MainActivity extends AppCompatActivity {
         return info != null && info.isConnected();
     }
 }
+
