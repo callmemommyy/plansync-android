@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "599480734973-0tg9t6ib0uih5tv7l9n7hqg7ip2g9ahm.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.plansync.app",
+            "certificate_hash": "7984d669e7ac905fc96586d9c435e8635ff4a3c1"
+          }
+        },
+        {
           "client_id": "599480734973-p5e2dc8pnhl8gu9gsfqlj71al5f9ca8j.apps.googleusercontent.com",
           "client_type": 3
         }
