@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "599480734973",
+    "project_id": "plansync-crazytime",
+    "storage_bucket": "plansync-crazytime.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:599480734973:android:d75702f9804e77cf549a94",
+        "android_client_info": {
+          "package_name": "com.plansync.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "599480734973-p5e2dc8pnhl8gu9gsfqlj71al5f9ca8j.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAI030pl8zOX3MhcSg6tvtGdLJo8YvZByw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "599480734973-p5e2dc8pnhl8gu9gsfqlj71al5f9ca8j.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

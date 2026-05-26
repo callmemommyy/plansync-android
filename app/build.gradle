@@ -1,5 +1,7 @@
 plugins {
     id 'com.android.application'
+    // Required for Firebase — processes google-services.json at build time
+    id 'com.google.gms.google-services'
 }
 
 android {
@@ -48,4 +50,12 @@ dependencies {
     implementation 'com.google.android.material:material:1.11.0'
     // Chrome Custom Tabs — allows Google OAuth without WebView restriction
     implementation 'androidx.browser:browser:1.8.0'
+
+    // ── Firebase ──────────────────────────────────────────────────────────────
+    // Import the Firebase BoM so all Firebase versions stay in sync
+    implementation platform('com.google.firebase:firebase-bom:33.1.0')
+    // Firebase Cloud Messaging — push notifications
+    implementation 'com.google.firebase:firebase-messaging'
+    // Firebase Analytics (optional but recommended for debugging)
+    implementation 'com.google.firebase:firebase-analytics'
 }
