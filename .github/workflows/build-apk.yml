@@ -39,7 +39,7 @@ jobs:
 
       - name: Verify keystore
         run: |
-          keytool -list \
+          keytool -list -v \
             -keystore app/keystore.jks \
             -storepass "${{ secrets.KEYSTORE_PASSWORD }}" \
             -alias "${{ secrets.KEY_ALIAS }}"
