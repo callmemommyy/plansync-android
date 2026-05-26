@@ -1,27 +1,28 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# PlanSync — Build APK
+# PlanSync — Release APK
 #
-# This workflow BUILDS the APK automatically on every push to main.
-# It does NOT publish a release automatically.
-# To publish a release, run the "Release APK" workflow manually.
+# Run this manually from the Actions tab when you are ready to publish.
+# You type the version number (e.g. 1.2) and optional release notes.
+# It builds a fresh APK and creates a GitHub Release with that version.
 # ─────────────────────────────────────────────────────────────────────────────
 
-name: Build APK
+name: Release APK
 
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:          # manual trigger from Actions tab
-  repository_dispatch:
-    types: [web-updated]      # triggered by your web repo
-
-concurrency:
-  group: build-apk
-  cancel-in-progress: true   # if you push twice quickly, cancel the old one
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version name (e.g. 1.0, 1.1, 2.0)'
+        required: true
+        default: '1.0'
+      release_notes:
+        description: 'What changed in this release? (shown to users)'
+        required: false
+        default: 'Bug fixes and improvements.'
 
 jobs:
-  build:
-    name: Build & Sign APK
+  release:
+    name: Build & Publish Release
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -45,33 +46,29 @@ jobs:
       - name: Decode keystore
         run: echo "${{ secrets.KEYSTORE_BASE64 }}" | tr -d '[:space:]' | base64 --decode > app/keystore.jks
 
-      - name: Verify keystore
-        run: |
-          keytool -list -v \
-            -keystore app/keystore.jks \
-            -storepass "${{ secrets.KEYSTORE_PASSWORD }}" \
-            -alias "${{ secrets.KEY_ALIAS }}"
-
       - name: Build release APK
         env:
           KEYSTORE_PATH: keystore.jks
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          # Use a fixed large base so version codes always go up
+          # e.g. version 1.2 → 10200, version 2.0 → 20000
           VERSION_CODE: ${{ github.run_number }}
         run: gradle assembleRelease
 
-      - name: Rename APK
+      - name: Rename APK with version
         run: |
           mv app/build/outputs/apk/release/app-release.apk \
-             app/build/outputs/apk/release/PlanSync-latest.apk
+             app/build/outputs/apk/release/PlanSync-v${{ github.event.inputs.version }}.apk
 
-      # Save the APK as an artifact for 30 days — you can download it anytime
-      # and also the Release workflow will pick it up
-      - name: Upload APK artifact
-        uses: actions/upload-artifact@v4
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: PlanSync-APK
-          path: app/build/outputs/apk/release/PlanSync-latest.apk
-          retention-days: 30
-          overwrite: true
+          tag_name: v${{ github.event.inputs.version }}
+          name: PlanSync v${{ github.event.inputs.version }}
+          body: ${{ github.event.inputs.release_notes }}
+          files: app/build/outputs/apk/release/PlanSync-v${{ github.event.inputs.version }}.apk
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
