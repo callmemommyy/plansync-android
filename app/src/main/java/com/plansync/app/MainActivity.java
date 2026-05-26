@@ -17,6 +17,7 @@ import android.util.Log;
 import android.view.View;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
@@ -25,6 +26,8 @@ import android.webkit.WebViewClient;
 import android.widget.LinearLayout;
 import android.widget.Button;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.browser.customtabs.CustomTabColorSchemeParams;
 import androidx.browser.customtabs.CustomTabsIntent;
@@ -41,8 +44,8 @@ import java.net.URL;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final String TAG        = "PlanSync";
-    private static final String APP_URL    = "https://plansyncapk.vercel.app";
+    private static final String TAG          = "PlanSync";
+    private static final String APP_URL      = "https://plansyncapk.vercel.app";
     private static final String GITHUB_OWNER = "callmemommyy";
     private static final String GITHUB_REPO  = "plansync-android";
 
@@ -50,6 +53,12 @@ public class MainActivity extends AppCompatActivity {
     private SwipeRefreshLayout swipeRefresh;
     private LinearLayout       offlineLayout;
     private NotificationBridge notificationBridge;
+
+    // File chooser callback — holds the pending <input type="file"> callback
+    private ValueCallback<Uri[]> fileChooserCallback = null;
+
+    // Launcher for picking files/photos from gallery or camera
+    private ActivityResultLauncher<Intent> filePickerLauncher;
 
     static volatile String latestFcmToken = null;
     private static MainActivity instance  = null;
@@ -66,6 +75,21 @@ public class MainActivity extends AppCompatActivity {
         Button retryBtn = findViewById(R.id.retry_button);
 
         PlanSyncFirebaseService.ensureChannel(this);
+
+        // Register file picker launcher — must be done in onCreate
+        filePickerLauncher = registerForActivityResult(
+                new ActivityResultContracts.StartActivityForResult(),
+                result -> {
+                    if (fileChooserCallback == null) return;
+                    Uri[] results = null;
+                    if (result.getResultCode() == RESULT_OK && result.getData() != null) {
+                        Uri dataUri = result.getData().getData();
+                        if (dataUri != null) results = new Uri[]{dataUri};
+                    }
+                    fileChooserCallback.onReceiveValue(results);
+                    fileChooserCallback = null;
+                });
+
         setupWebView();
 
         swipeRefresh.setOnRefreshListener(() -> webView.reload());
@@ -126,7 +150,8 @@ public class MainActivity extends AppCompatActivity {
         settings.setDatabaseEnabled(true);
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
         settings.setMediaPlaybackRequiresUserGesture(false);
-        settings.setAllowFileAccess(false);
+        settings.setAllowFileAccess(true);           // needed for file upload
+        settings.setAllowContentAccess(true);        // needed for content:// URIs
         settings.setSupportZoom(false);
         settings.setLoadWithOverviewMode(true);
         settings.setUseWideViewPort(true);
@@ -135,20 +160,15 @@ public class MainActivity extends AppCompatActivity {
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
 
         // ── JS Bridge: Native Google Sign-In ─────────────────────────────────
-        // The web app calls Android.triggerNativeGoogleSignIn() instead of
-        // using signInWithRedirect/popup. We launch Credential Manager,
-        // get an ID token, and post it back via window.onNativeGoogleToken().
         webView.addJavascriptInterface(new Object() {
 
             @JavascriptInterface
             public void triggerNativeGoogleSignIn() {
-                // Must run on main thread for Credential Manager UI
                 runOnUiThread(() -> {
                     GoogleSignInHelper.signIn(MainActivity.this, new GoogleSignInHelper.Callback() {
                         @Override
                         public void onSuccess(String idToken) {
                             runOnUiThread(() -> {
-                                // Escape the token for safe JS injection
                                 String safeToken = idToken.replace("'", "\\'");
                                 String js = "if(typeof window.onNativeGoogleToken==='function')" +
                                             "window.onNativeGoogleToken('" + safeToken + "');";
@@ -160,8 +180,7 @@ public class MainActivity extends AppCompatActivity {
                         public void onFailure(String error) {
                             Log.e(TAG, "Native Google Sign-In failed: " + error);
                             runOnUiThread(() -> {
-                                String safeError = error.replace("'", "\\'")
-                                                        .replace("\n", " ");
+                                String safeError = error.replace("'", "\\'").replace("\n", " ");
                                 String js = "if(typeof window.onNativeGoogleError==='function')" +
                                             "window.onNativeGoogleError('" + safeError + "');";
                                 webView.evaluateJavascript(js, null);
@@ -180,7 +199,6 @@ public class MainActivity extends AppCompatActivity {
                 });
             }
 
-            // Legacy fallback — kept so old JS calls don't crash
             @JavascriptInterface
             public void openGoogleAuth(String url) {
                 runOnUiThread(() -> openInCustomTab(url));
@@ -198,7 +216,6 @@ public class MainActivity extends AppCompatActivity {
                 String url = request.getUrl().toString();
                 if (url.startsWith(APP_URL)) return false;
 
-                // Fallback: if a Google auth URL somehow slips through, use Custom Tab
                 if (url.contains("accounts.google.com") ||
                     url.contains("google.com/o/oauth2") ||
                     url.contains("identitytoolkit.googleapis.com")) {
@@ -232,7 +249,53 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        webView.setWebChromeClient(new WebChromeClient());
+        // ── WebChromeClient handles <input type="file"> ───────────────────────
+        webView.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onShowFileChooser(WebView webView,
+                                             ValueCallback<Uri[]> filePathCallback,
+                                             FileChooserParams fileChooserParams) {
+                // Cancel any previous pending callback
+                if (fileChooserCallback != null) {
+                    fileChooserCallback.onReceiveValue(null);
+                }
+                fileChooserCallback = filePathCallback;
+
+                // Request storage/camera permission first if needed, then open picker
+                requestStoragePermissionAndOpenPicker(fileChooserParams);
+                return true;
+            }
+        });
+    }
+
+    private void requestStoragePermissionAndOpenPicker(WebChromeClient.FileChooserParams params) {
+        // On Android 13+ use READ_MEDIA_IMAGES; below that use READ_EXTERNAL_STORAGE
+        String permission = Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU
+                ? Manifest.permission.READ_MEDIA_IMAGES
+                : Manifest.permission.READ_EXTERNAL_STORAGE;
+
+        if (checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED) {
+            openFilePicker(params);
+        } else {
+            // Store params and request permission; result handled in onRequestPermissionsResult
+            pendingFileChooserParams = params;
+            requestPermissions(new String[]{permission, Manifest.permission.CAMERA},
+                    REQUEST_CODE_STORAGE);
+        }
+    }
+
+    // Temporary holder for params while permission dialog is shown
+    private WebChromeClient.FileChooserParams pendingFileChooserParams = null;
+    private static final int REQUEST_CODE_STORAGE = 200;
+
+    private void openFilePicker(WebChromeClient.FileChooserParams params) {
+        // Build a chooser: gallery images + camera capture
+        Intent galleryIntent = new Intent(Intent.ACTION_GET_CONTENT);
+        galleryIntent.setType("image/*");
+        galleryIntent.addCategory(Intent.CATEGORY_OPENABLE);
+
+        Intent chooser = Intent.createChooser(galleryIntent, "Select Photo");
+        filePickerLauncher.launch(chooser);
     }
 
     private void requestNotificationPermissionIfNeeded() {
@@ -250,10 +313,20 @@ public class MainActivity extends AppCompatActivity {
                                            String[] permissions,
                                            int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
         if (requestCode == NotificationBridge.REQUEST_CODE && notificationBridge != null) {
             boolean granted = grantResults.length > 0 &&
                               grantResults[0] == PackageManager.PERMISSION_GRANTED;
             notificationBridge.deliverResult(granted ? "granted" : "denied");
+        }
+
+        if (requestCode == REQUEST_CODE_STORAGE) {
+            // Whether granted or denied, try to open picker anyway
+            // (user may have granted partial permission or denied — let the OS handle it)
+            if (pendingFileChooserParams != null) {
+                openFilePicker(pendingFileChooserParams);
+                pendingFileChooserParams = null;
+            }
         }
     }
 
