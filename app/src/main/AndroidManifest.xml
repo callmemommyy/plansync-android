@@ -3,6 +3,8 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Required on Android 13+ (API 33+) for POST_NOTIFICATIONS -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="true"
@@ -27,6 +29,7 @@
             </intent-filter>
 
             <!-- Deep link: catches redirect back from Google auth in Chrome -->
+            <!-- Also handles notification tap deep links: /events/{id} -->
             <intent-filter android:autoVerify="true">
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -35,6 +38,30 @@
             </intent-filter>
 
         </activity>
+
+        <!-- FCM service: handles token refresh + background notifications -->
+        <service
+            android:name=".PlanSyncFirebaseService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Default notification channel for Android 8+ -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="plansync_events" />
+
+        <!-- Default notification icon (must be a white-on-transparent drawable) -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@mipmap/ic_launcher" />
+
+        <!-- Default notification color -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_color"
+            android:resource="@color/colorPrimary" />
 
     </application>
 

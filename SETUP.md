@@ -1,81 +1,72 @@
-# PlanSync Android — Setup Guide
+# PlanSync Android — Setup
 
-## What this is
-
-A minimal Android app that loads `https://plansyncapk.vercel.app` in a WebView.
-GitHub Actions builds and signs the APK automatically on every push to `main`.
+## Prerequisites
+- Android Studio Hedgehog or newer
+- Firebase project (same one used by the web app)
 
 ---
 
-## One-time setup
+## 1. Add google-services.json  ← REQUIRED before building
 
-### 1. Generate a signing keystore (do this once, on your machine)
+1. Open [Firebase Console](https://console.firebase.google.com) → your project
+2. Project Settings → Your apps → Add app (Android)
+   - Package name: `com.plansync.app`
+   - Download **google-services.json**
+3. Place the file at:  `app/google-services.json`
+
+Without this file, the build will fail with:
+`File google-services.json is missing from module root folder`
+
+---
+
+## 2. Enable Cloud Messaging in Firebase Console
+
+1. Firebase Console → Project Settings → Cloud Messaging
+2. Make sure Firebase Cloud Messaging API (V1) is **enabled**
+3. Copy the **Server key** — you'll need it for the Cloud Functions
+
+---
+
+## 3. Build
 
 ```bash
-keytool -genkey -v \
-  -keystore plansync.jks \
-  -alias plansync \
-  -keyalg RSA -keysize 2048 \
-  -validity 10000
+# Debug APK
+./gradlew assembleDebug
+
+# Release APK (needs KEYSTORE_PATH, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD env vars)
+./gradlew assembleRelease
 ```
 
-You'll be prompted for a keystore password, your name/org, and a key password.
-**Save these passwords — you need them forever.**
+---
 
-### 2. Encode the keystore as base64
+## 4. How notifications work
 
-```bash
-# macOS / Linux
-base64 -i plansync.jks | pbcopy   # copies to clipboard on macOS
-base64 -i plansync.jks            # print and copy manually on Linux
+```
+Cloud Function (Firestore trigger)
+  → Firebase Cloud Messaging
+      → App in background: PlanSyncFirebaseService shows a system notification
+        with a deep link tap target → opens the event page directly
+      → App in foreground: FCM calls onMessageReceived() → shows notification
+        AND posts JS event to WebView so the in-app toast fires too
+      → App killed: FCM SDK shows notification automatically via notification payload
 ```
 
-### 3. Add GitHub Secrets
+### Token flow
+1. App starts → `FirebaseMessaging.getToken()` → cached in `MainActivity.latestFcmToken`
+2. `NotificationBridge.getFcmToken()` exposes it to JS
+3. Web shim (`notification-webview-shim.ts`) picks it up and saves to Firestore
+4. Token rotates → `PlanSyncFirebaseService.onNewToken()` → calls `MainActivity.postTokenRefresh()`
+   → injects `window.onFcmTokenRefreshed(token)` into WebView → web app re-saves to Firestore
 
-Go to your repo → **Settings → Secrets and variables → Actions → New repository secret**
+---
 
-| Secret | Value |
+## Files changed from original
+
+| File | What changed |
 |---|---|
-| `KEYSTORE_BASE64` | The base64 string from step 2 |
-| `KEYSTORE_PASSWORD` | Password you set in step 1 |
-| `KEY_ALIAS` | `plansync` (or whatever alias you used) |
-| `KEY_PASSWORD` | Key password from step 1 |
-
-### 4. Push to GitHub
-
-```bash
-git add .
-git commit -m "Add Android WebView app"
-git push origin main
-```
-
----
-
-## Getting the APK
-
-After the GitHub Actions run completes (~3 minutes):
-
-- **GitHub Releases** — go to your repo → Releases → download `PlanSync-vN.apk`
-- **Actions tab** — click the latest run → Artifacts → download `PlanSync-APK`
-
-You can also trigger a build manually: Actions → Build APK → Run workflow.
-
----
-
-## Installing on your phone
-
-1. On your Android device, go to **Settings → Apps → Special app access → Install unknown apps**
-2. Allow your browser or file manager to install APKs
-3. Download and open the APK
-
----
-
-## App features
-
-- Loads `https://plansyncapk.vercel.app` full-screen
-- Pull-to-refresh
-- Back button navigates browser history
-- Offline screen with retry button
-- Firebase Auth works (localStorage + cookies persisted)
-- External links open in the system browser
-- Deep links (`https://plansyncapk.vercel.app/...`) open in the app
+| `app/build.gradle` | Added `firebase-bom`, `firebase-messaging`, `firebase-analytics`, `google-services` plugin |
+| `build.gradle` | Added `google-services` classpath |
+| `AndroidManifest.xml` | Added `POST_NOTIFICATIONS` permission, FCM service, channel + icon metadata |
+| `MainActivity.java` | Added `NotificationBridge`, permission request + result handler, deep link navigation, token fetch, `postTokenRefresh()` static helper |
+| `NotificationBridge.java` | **New** — JS interface for `window.NotificationBridge` |
+| `PlanSyncFirebaseService.java` | **New** — FCM token refresh + foreground notification builder + channel setup |
