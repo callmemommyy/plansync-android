@@ -13,6 +13,7 @@ import android.net.NetworkInfo;
 import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.View;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
@@ -40,7 +41,8 @@ import java.net.URL;
 
 public class MainActivity extends AppCompatActivity {
 
-    private static final String APP_URL      = "https://plansyncapk.vercel.app";
+    private static final String TAG        = "PlanSync";
+    private static final String APP_URL    = "https://plansyncapk.vercel.app";
     private static final String GITHUB_OWNER = "callmemommyy";
     private static final String GITHUB_REPO  = "plansync-android";
 
@@ -49,14 +51,8 @@ public class MainActivity extends AppCompatActivity {
     private LinearLayout       offlineLayout;
     private NotificationBridge notificationBridge;
 
-    /**
-     * Latest FCM token — set by PlanSyncFirebaseService.onNewToken()
-     * and read by NotificationBridge.getFcmToken().
-     */
     static volatile String latestFcmToken = null;
-
-    // Weak reference to forward SW token-refresh events to the WebView
-    private static MainActivity instance = null;
+    private static MainActivity instance  = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -69,9 +65,7 @@ public class MainActivity extends AppCompatActivity {
         offlineLayout = findViewById(R.id.offline_layout);
         Button retryBtn = findViewById(R.id.retry_button);
 
-        // Create the notification channel early — safe to call repeatedly
         PlanSyncFirebaseService.ensureChannel(this);
-
         setupWebView();
 
         swipeRefresh.setOnRefreshListener(() -> webView.reload());
@@ -85,34 +79,24 @@ public class MainActivity extends AppCompatActivity {
             }
         });
 
-        // Fetch FCM token once on startup and cache it
-        FirebaseMessaging.getInstance().getToken().addOnSuccessListener(token -> {
-            latestFcmToken = token;
-        });
+        FirebaseMessaging.getInstance().getToken()
+                .addOnSuccessListener(token -> latestFcmToken = token);
 
-        // Request notification permission on Android 13+ — politely, on first launch
         requestNotificationPermissionIfNeeded();
-
         handleIntent(getIntent());
     }
 
-    @Override
-    protected void onDestroy() {
+    @Override protected void onDestroy() {
         super.onDestroy();
         if (instance == this) instance = null;
     }
 
-    @Override
-    protected void onNewIntent(Intent intent) {
+    @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
         handleIntent(intent);
     }
 
-    /**
-     * Called by PlanSyncFirebaseService when the FCM token rotates.
-     * Injects JS so the web app re-registers the new token in Firestore.
-     */
     static void postTokenRefresh(String newToken) {
         latestFcmToken = newToken;
         MainActivity act = instance;
@@ -127,13 +111,9 @@ public class MainActivity extends AppCompatActivity {
     private void handleIntent(Intent intent) {
         if (intent == null) { loadApp(APP_URL); return; }
         Uri data = intent.getData();
-        if (data != null) {
-            String url = data.toString();
-            // Notification tap deep-link — navigate directly to the event page
-            if (url.startsWith(APP_URL)) {
-                loadApp(url);
-                return;
-            }
+        if (data != null && data.toString().startsWith(APP_URL)) {
+            loadApp(data.toString());
+            return;
         }
         loadApp(APP_URL);
     }
@@ -154,12 +134,58 @@ public class MainActivity extends AppCompatActivity {
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(webView, true);
 
-        // ── JS Bridge: Google auth ────────────────────────────────────────────
+        // ── JS Bridge: Native Google Sign-In ─────────────────────────────────
+        // The web app calls Android.triggerNativeGoogleSignIn() instead of
+        // using signInWithRedirect/popup. We launch Credential Manager,
+        // get an ID token, and post it back via window.onNativeGoogleToken().
         webView.addJavascriptInterface(new Object() {
+
+            @JavascriptInterface
+            public void triggerNativeGoogleSignIn() {
+                // Must run on main thread for Credential Manager UI
+                runOnUiThread(() -> {
+                    GoogleSignInHelper.signIn(MainActivity.this, new GoogleSignInHelper.Callback() {
+                        @Override
+                        public void onSuccess(String idToken) {
+                            runOnUiThread(() -> {
+                                // Escape the token for safe JS injection
+                                String safeToken = idToken.replace("'", "\\'");
+                                String js = "if(typeof window.onNativeGoogleToken==='function')" +
+                                            "window.onNativeGoogleToken('" + safeToken + "');";
+                                webView.evaluateJavascript(js, null);
+                            });
+                        }
+
+                        @Override
+                        public void onFailure(String error) {
+                            Log.e(TAG, "Native Google Sign-In failed: " + error);
+                            runOnUiThread(() -> {
+                                String safeError = error.replace("'", "\\'")
+                                                        .replace("\n", " ");
+                                String js = "if(typeof window.onNativeGoogleError==='function')" +
+                                            "window.onNativeGoogleError('" + safeError + "');";
+                                webView.evaluateJavascript(js, null);
+                            });
+                        }
+
+                        @Override
+                        public void onCancelled() {
+                            runOnUiThread(() -> {
+                                String js = "if(typeof window.onNativeGoogleCancelled==='function')" +
+                                            "window.onNativeGoogleCancelled();";
+                                webView.evaluateJavascript(js, null);
+                            });
+                        }
+                    });
+                });
+            }
+
+            // Legacy fallback — kept so old JS calls don't crash
             @JavascriptInterface
             public void openGoogleAuth(String url) {
                 runOnUiThread(() -> openInCustomTab(url));
             }
+
         }, "Android");
 
         // ── JS Bridge: Notification permission ───────────────────────────────
@@ -172,6 +198,7 @@ public class MainActivity extends AppCompatActivity {
                 String url = request.getUrl().toString();
                 if (url.startsWith(APP_URL)) return false;
 
+                // Fallback: if a Google auth URL somehow slips through, use Custom Tab
                 if (url.contains("accounts.google.com") ||
                     url.contains("google.com/o/oauth2") ||
                     url.contains("identitytoolkit.googleapis.com")) {
@@ -208,12 +235,10 @@ public class MainActivity extends AppCompatActivity {
         webView.setWebChromeClient(new WebChromeClient());
     }
 
-    // ── Notification permission (Android 13+) ─────────────────────────────────
     private void requestNotificationPermissionIfNeeded() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return;
         if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
                 == PackageManager.PERMISSION_GRANTED) return;
-
         requestPermissions(
             new String[]{Manifest.permission.POST_NOTIFICATIONS},
             NotificationBridge.REQUEST_CODE
@@ -232,7 +257,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // ── Chrome Custom Tab for Google OAuth ────────────────────────────────────
     private void openInCustomTab(String url) {
         CustomTabsIntent intent = new CustomTabsIntent.Builder()
                 .setDefaultColorSchemeParams(
@@ -256,7 +280,6 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    // ── Update checker ────────────────────────────────────────────────────────
     @SuppressWarnings("deprecation")
     private void checkForUpdate() {
         final int currentVersion = getInstalledVersionCode();
@@ -272,19 +295,17 @@ public class MainActivity extends AppCompatActivity {
                     conn.setConnectTimeout(5000);
                     conn.setReadTimeout(5000);
                     if (conn.getResponseCode() != 200) return null;
-
                     BufferedReader reader = new BufferedReader(
                             new InputStreamReader(conn.getInputStream()));
                     StringBuilder sb = new StringBuilder();
                     String line;
                     while ((line = reader.readLine()) != null) sb.append(line);
                     reader.close();
-
-                    JSONObject json    = new JSONObject(sb.toString());
-                    String tagName     = json.getString("tag_name");
-                    int latestVersion  = Integer.parseInt(tagName.replace("v", "").trim());
+                    JSONObject json   = new JSONObject(sb.toString());
+                    String tagName    = json.getString("tag_name");
+                    int latestVersion = Integer.parseInt(tagName.replace("v", "").trim());
                     String downloadUrl = null;
-                    JSONArray assets   = json.getJSONArray("assets");
+                    JSONArray assets  = json.getJSONArray("assets");
                     for (int i = 0; i < assets.length(); i++) {
                         if (assets.getJSONObject(i).getString("name").endsWith(".apk")) {
                             downloadUrl = assets.getJSONObject(i).getString("browser_download_url");
@@ -295,12 +316,10 @@ public class MainActivity extends AppCompatActivity {
                     return new UpdateInfo(latestVersion, tagName, downloadUrl);
                 } catch (Exception e) { return null; }
             }
-
             @Override
             protected void onPostExecute(UpdateInfo info) {
-                if (info != null && info.versionCode > currentVersion) {
+                if (info != null && info.versionCode > currentVersion)
                     showUpdateDialog(info.versionName, info.downloadUrl);
-                }
             }
         }.execute();
     }
@@ -328,20 +347,17 @@ public class MainActivity extends AppCompatActivity {
         } catch (PackageManager.NameNotFoundException e) { return 1; }
     }
 
-    @Override
-    public void onBackPressed() {
+    @Override public void onBackPressed() {
         if (webView.canGoBack()) webView.goBack();
         else super.onBackPressed();
     }
 
-    @Override
-    protected void onSaveInstanceState(Bundle outState) {
+    @Override protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
         webView.saveState(outState);
     }
 
-    @Override
-    protected void onRestoreInstanceState(Bundle savedInstanceState) {
+    @Override protected void onRestoreInstanceState(Bundle savedInstanceState) {
         super.onRestoreInstanceState(savedInstanceState);
         webView.restoreState(savedInstanceState);
     }
