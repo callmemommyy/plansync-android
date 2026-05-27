@@ -34,6 +34,11 @@ import androidx.browser.customtabs.CustomTabsIntent;
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout;
 
 import com.google.firebase.messaging.FirebaseMessaging;
+import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.firestore.SetOptions;
+import java.util.HashMap;
+import java.util.Map;
+import android.content.Context;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -138,6 +143,28 @@ public class MainActivity extends AppCompatActivity {
                         "window.androidFcmReady('" + newToken + "');";
             act.webView.evaluateJavascript(js, null);
         });
+    }
+
+    /**
+     * Save FCM token directly to Firestore from Android.
+     * Called when we have both the UID (from JS) and the token.
+     */
+    static void saveTokenToFirestore(Context context, String uid) {
+        String token = latestFcmToken;
+        if (token == null || token.isEmpty() || uid == null || uid.isEmpty()) return;
+
+        Map<String, Object> data = new HashMap<>();
+        data.put("token", token);
+        data.put("platform", "android");
+
+        FirebaseFirestore.getInstance()
+            .collection("users")
+            .document(uid)
+            .collection("fcmTokens")
+            .document(token)
+            .set(data, SetOptions.merge())
+            .addOnSuccessListener(v -> Log.d("PlanSyncFCM", "Token saved to Firestore for " + uid))
+            .addOnFailureListener(e -> Log.w("PlanSyncFCM", "Failed to save token", e));
     }
 
     private void handleIntent(Intent intent) {
