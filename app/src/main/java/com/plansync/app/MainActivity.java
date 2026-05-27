@@ -54,6 +54,9 @@ public class MainActivity extends AppCompatActivity {
     private static final String GITHUB_OWNER = "callmemommyy";
     private static final String GITHUB_REPO  = "plansync-android";
 
+    // SharedPreferences key for the last release timestamp the user was shown
+    private static final String PREF_LAST_SEEN_RELEASE = "last_seen_release";
+
     private WebView            webView;
     private SwipeRefreshLayout swipeRefresh;
     private LinearLayout       offlineLayout;
@@ -396,9 +399,16 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    // ── Update check ─────────────────────────────────────────────────────────
+    //
+    // Instead of comparing integer version codes (which don't change when you
+    // re-publish a new APK under the same tag), we compare the release's
+    // `published_at` ISO-8601 timestamp against the last one the user was
+    // notified about.  A brand-new release always has a newer timestamp, even
+    // when the tag name/version number stays the same.
+    //
     @SuppressWarnings("deprecation")
     private void checkForUpdate() {
-        final int currentVersion = getInstalledVersionCode();
         new AsyncTask<Void, Void, UpdateInfo>() {
             @Override
             protected UpdateInfo doInBackground(Void... v) {
@@ -417,30 +427,65 @@ public class MainActivity extends AppCompatActivity {
                     String line;
                     while ((line = reader.readLine()) != null) sb.append(line);
                     reader.close();
-                    JSONObject json   = new JSONObject(sb.toString());
-                    String tagName    = json.getString("tag_name");
-                    int latestVersion = Integer.parseInt(tagName.replace("v", "").trim());
+
+                    JSONObject json      = new JSONObject(sb.toString());
+                    String tagName       = json.getString("tag_name");
+                    // published_at format: "2025-05-28T10:00:00Z" — lexicographic
+                    // comparison works correctly for ISO-8601 UTC timestamps.
+                    String publishedAt   = json.getString("published_at");
+
                     String downloadUrl = null;
-                    JSONArray assets  = json.getJSONArray("assets");
+                    JSONArray assets   = json.getJSONArray("assets");
                     for (int i = 0; i < assets.length(); i++) {
                         if (assets.getJSONObject(i).getString("name").endsWith(".apk")) {
-                            downloadUrl = assets.getJSONObject(i).getString("browser_download_url");
+                            downloadUrl = assets.getJSONObject(i)
+                                                .getString("browser_download_url");
                             break;
                         }
                     }
                     if (downloadUrl == null) downloadUrl = json.getString("html_url");
-                    return new UpdateInfo(latestVersion, tagName, downloadUrl);
-                } catch (Exception e) { return null; }
+
+                    return new UpdateInfo(tagName, publishedAt, downloadUrl);
+                } catch (Exception e) {
+                    Log.w(TAG, "Update check failed: " + e.getMessage());
+                    return null;
+                }
             }
+
             @Override
             protected void onPostExecute(UpdateInfo info) {
-                if (info != null && info.versionCode > currentVersion)
-                    showUpdateDialog(info.versionName, info.downloadUrl);
+                if (info != null && isNewerRelease(info.publishedAt)) {
+                    showUpdateDialog(info.versionName, info.publishedAt, info.downloadUrl);
+                }
             }
         }.execute();
     }
 
-    private void showUpdateDialog(String versionName, String downloadUrl) {
+    /**
+     * Returns true when the release timestamp from GitHub is strictly newer
+     * than the last one we told the user about.
+     * ISO-8601 UTC strings ("2025-05-28T10:00:00Z") sort correctly as plain
+     * strings, so no date parsing is needed.
+     */
+    private boolean isNewerRelease(String publishedAt) {
+        if (publishedAt == null || publishedAt.isEmpty()) return false;
+        String lastSeen = getSharedPreferences("plansync", MODE_PRIVATE)
+                              .getString(PREF_LAST_SEEN_RELEASE, "");
+        return publishedAt.compareTo(lastSeen) > 0;
+    }
+
+    /**
+     * Show the "Update available" dialog and remember this release so we
+     * don't nag the user again on the next app launch.
+     */
+    private void showUpdateDialog(String versionName, String publishedAt, String downloadUrl) {
+        // Persist the timestamp immediately so repeated launches don't re-show
+        // the dialog for the same release even if the user taps "Later".
+        getSharedPreferences("plansync", MODE_PRIVATE)
+                .edit()
+                .putString(PREF_LAST_SEEN_RELEASE, publishedAt)
+                .apply();
+
         new AlertDialog.Builder(this)
                 .setTitle("Update Available")
                 .setMessage("PlanSync " + versionName + " is available. Tap Update to install.")
@@ -451,11 +496,21 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
+    // ── UpdateInfo — carries release metadata from the background thread ──────
     private static class UpdateInfo {
-        final int versionCode; final String versionName, downloadUrl;
-        UpdateInfo(int c, String n, String u) { versionCode=c; versionName=n; downloadUrl=u; }
+        final String versionName;   // tag_name  e.g. "v5"
+        final String publishedAt;   // ISO-8601  e.g. "2025-05-28T10:00:00Z"
+        final String downloadUrl;   // direct APK or release page URL
+
+        UpdateInfo(String versionName, String publishedAt, String downloadUrl) {
+            this.versionName  = versionName;
+            this.publishedAt  = publishedAt;
+            this.downloadUrl  = downloadUrl;
+        }
     }
 
+    // getInstalledVersionCode() is no longer used for the update comparison but
+    // kept here in case other parts of the codebase reference it in future.
     private int getInstalledVersionCode() {
         try {
             PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), 0);
