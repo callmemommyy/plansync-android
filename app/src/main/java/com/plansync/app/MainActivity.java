@@ -104,7 +104,11 @@ public class MainActivity extends AppCompatActivity {
         });
 
         FirebaseMessaging.getInstance().getToken()
-                .addOnSuccessListener(token -> latestFcmToken = token);
+                .addOnSuccessListener(token -> {
+                    latestFcmToken = token;
+                    // Deliver token to WebView so it saves to Firestore immediately
+                    postTokenRefresh(token);
+                });
 
         requestNotificationPermissionIfNeeded();
         handleIntent(getIntent());
@@ -126,8 +130,12 @@ public class MainActivity extends AppCompatActivity {
         MainActivity act = instance;
         if (act == null) return;
         act.runOnUiThread(() -> {
+            // onFcmTokenRefreshed — handles token rotation (existing)
+            // androidFcmReady    — handles first-time token save on login (new)
             String js = "if(typeof window.onFcmTokenRefreshed==='function')" +
-                        "window.onFcmTokenRefreshed('" + newToken + "');";
+                        "window.onFcmTokenRefreshed('" + newToken + "');" +
+                        "if(typeof window.androidFcmReady==='function')" +
+                        "window.androidFcmReady('" + newToken + "');";
             act.webView.evaluateJavascript(js, null);
         });
     }
@@ -235,6 +243,14 @@ public class MainActivity extends AppCompatActivity {
                 if (isOnline()) {
                     webView.setVisibility(View.VISIBLE);
                     offlineLayout.setVisibility(View.GONE);
+                }
+                // Re-deliver token on every page load so freshly logged-in
+                // users always get their token saved to Firestore
+                if (latestFcmToken != null) {
+                    String safeToken = latestFcmToken;
+                    String js = "if(typeof window.androidFcmReady==='function')" +
+                                "window.androidFcmReady('" + safeToken + "');";
+                    view.evaluateJavascript(js, null);
                 }
             }
 
