@@ -138,14 +138,16 @@ public class MainActivity extends AppCompatActivity {
         MainActivity act = instance;
         if (act == null) return;
         act.runOnUiThread(() -> {
-            // onFcmTokenRefreshed — handles token rotation (existing)
-            // androidFcmReady    — handles first-time token save on login (new)
             String js = "if(typeof window.onFcmTokenRefreshed==='function')" +
                         "window.onFcmTokenRefreshed('" + newToken + "');" +
                         "if(typeof window.androidFcmReady==='function')" +
                         "window.androidFcmReady('" + newToken + "');";
             act.webView.evaluateJavascript(js, null);
         });
+        // Also register via Vercel directly — handles token rotation
+        if (act.notificationBridge != null) {
+            act.notificationBridge.onTokenRefreshed(newToken);
+        }
     }
 
     /**
